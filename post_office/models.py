@@ -207,7 +207,7 @@ class Log(models.Model):
     date = models.DateTimeField(auto_now_add=True)
     status = models.PositiveSmallIntegerField(_('Status'), choices=STATUS_CHOICES)
     exception_type = models.CharField(_('Exception type'), max_length=255, blank=True)
-    message = models.TextField(_('Message'))
+    message = models.TextField(_('Message'), blank=True)
 
     class Meta:
         app_label = 'post_office'
@@ -245,6 +245,7 @@ class EmailTemplate(models.Model):
         default='', blank=True)
     default_template = models.ForeignKey('self', related_name='translated_templates',
         null=True, default=None, verbose_name=_('Default template'), on_delete=models.CASCADE)
+    example_context = context_field_class(_('Context'), blank=True, null=True)
 
     objects = EmailTemplateManager()
 

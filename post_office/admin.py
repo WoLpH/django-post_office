@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals
-from django import forms
+from django import forms, http
 from django.db import models
 from django.contrib import admin
 from django.conf import settings
 from django.forms.widgets import TextInput
-from django.utils import six
+from django.utils import six, html
 from django.utils.text import Truncator
 from django.utils.translation import ugettext_lazy as _
 
 from .fields import CommaSeparatedEmailField
 from .models import Attachment, Log, Email, EmailTemplate, STATUS
+from . import settings as post_office_settings
 
 
 def get_message_preview(instance):
@@ -109,6 +110,7 @@ class EmailTemplateAdmin(admin.ModelAdmin):
     form = EmailTemplateAdminForm
     list_display = ('name', 'description_shortened', 'subject', 'languages_compact', 'created')
     search_fields = ('name', 'description', 'subject')
+    readonly_fields = 'rendered_content', 'rendered_html_content'
     fieldsets = [
         (None, {
             'fields': ('name', 'description'),
@@ -116,11 +118,49 @@ class EmailTemplateAdmin(admin.ModelAdmin):
         (_("Default Content"), {
             'fields': ('subject', 'content', 'html_content'),
         }),
+        (_("Preview"), {
+            'fields': ('example_context', 'rendered_content',
+                       'rendered_html_content'),
+        }),
     ]
     inlines = (EmailTemplateInline,) if settings.USE_I18N else ()
     formfield_overrides = {
         models.CharField: {'widget': SubjectField}
     }
+
+    def change_view(self, request, object_id, form_url='', extra_context=None):
+        if request.GET.get('preview'):
+            instance = self.model.objects.get(id=object_id)
+            engine = post_office_settings.get_template_engine()
+            if request.GET.get('preview') == 'html':
+                template = engine.from_string(instance.html_content)
+            else:
+                template = engine.from_string(
+                    '<pre>%s</pre>' % instance.content)
+
+            return http.HttpResponse(template.render(instance.example_context))
+
+        return super(EmailTemplateAdmin, self).change_view(
+            request, object_id, form_url=form_url, extra_context=extra_context)
+
+    def rendered_content(self, instance):
+        if instance.content:
+            height = instance.content.count('\n') * 25
+            return html.mark_safe(
+                '<iframe '
+                'style="width: 80%; height: {}px;"'
+                ' src="?preview=text">'
+                '</iframe>'.format(height))
+        else:
+            return ''
+
+    def rendered_html_content(self, instance):
+        if instance.html_content:
+            return html.mark_safe('<iframe '
+                                  'style="width: 80%; height: 800px;" '
+                                  'src="?preview=html"></iframe>')
+        else:
+            return ''
 
     def get_queryset(self, request):
         return self.model.objects.filter(default_template__isnull=True)
