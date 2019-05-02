@@ -60,6 +60,7 @@ class EmailAdmin(admin.ModelAdmin):
         CommaSeparatedEmailField: {'widget': CommaSeparatedEmailWidget}
     }
     actions = [requeue]
+    save_as = True
 
     def get_queryset(self, request):
         return super(EmailAdmin, self).get_queryset(request).select_related('template')
@@ -133,7 +134,10 @@ class EmailTemplateAdmin(admin.ModelAdmin):
             instance = self.model.objects.get(id=object_id)
             engine = post_office_settings.get_template_engine()
             if request.GET.get('preview') == 'html':
-                template = engine.from_string(instance.html_content)
+                template = engine.from_string(
+                    instance.html_content
+                        .replace('inline_image', 'static')
+                        .replace(' post_office ', ' static '))
             else:
                 template = engine.from_string(
                     '<pre>%s</pre>' % instance.content)
