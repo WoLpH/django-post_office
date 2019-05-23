@@ -161,7 +161,7 @@ class EmailTemplateAdmin(admin.ModelAdmin):
                     language=request.GET.get('language'),
                 ).first()
             else:
-                template_instance = self
+                template_instance = instance
 
             if request.GET.get('preview') == 'html':
                 template = engine.from_string(
