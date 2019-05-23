@@ -98,10 +98,32 @@ class EmailTemplateInline(admin.StackedInline):
     form = EmailTemplateAdminForm
     model = EmailTemplate
     extra = 0
-    fields = ('language', 'subject', 'content', 'html_content',)
+    fields = ('language', 'subject', 'content', 'html_content',
+              'rendered_content', 'rendered_html_content',)
+    readonly_fields = 'rendered_content', 'rendered_html_content'
     formfield_overrides = {
         models.CharField: {'widget': SubjectField}
     }
+
+    def rendered_content(self, instance):
+        if instance.content:
+            height = instance.content.count('\n') * 25
+            return html.mark_safe(
+                '<iframe '
+                'style="width: 80%; height: {}px;"'
+                ' src="?preview=text&language={}">'
+                '</iframe>'.format(height, instance.language))
+        else:
+            return ''
+
+    def rendered_html_content(self, instance):
+        if instance.html_content:
+            return html.mark_safe('<iframe '
+                                  'style="width: 80%; height: 800px;" '
+                                  'src="?preview=html&language={}"></iframe>'
+                                  .format(instance.language))
+        else:
+            return ''
 
     def get_max_num(self, request, obj=None, **kwargs):
         return len(settings.LANGUAGES)
@@ -133,14 +155,22 @@ class EmailTemplateAdmin(admin.ModelAdmin):
         if request.GET.get('preview'):
             instance = self.model.objects.get(id=object_id)
             engine = post_office_settings.get_template_engine()
+
+            if request.GET.get('language'):
+                template_instance = instance.translated_templates.filter(
+                    language=request.GET.get('language'),
+                ).first()
+            else:
+                template_instance = self
+
             if request.GET.get('preview') == 'html':
                 template = engine.from_string(
-                    instance.html_content
-                        .replace('inline_image', 'static')
-                        .replace(' post_office ', ' static '))
+                    template_instance.html_content
+                    .replace('inline_image', 'static')
+                    .replace(' post_office ', ' static '))
             else:
                 template = engine.from_string(
-                    '<pre>%s</pre>' % instance.content)
+                    '<pre>%s</pre>' % template_instance.content)
 
             return http.HttpResponse(template.render(instance.example_context))
 
