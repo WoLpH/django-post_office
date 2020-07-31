@@ -1,6 +1,5 @@
 from django.db.models import TextField
-from django.utils import six
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 from .validators import validate_comma_separated_emails
 
@@ -11,7 +10,7 @@ class CommaSeparatedEmailField(TextField):
 
     def __init__(self, *args, **kwargs):
         kwargs['blank'] = True
-        super(CommaSeparatedEmailField, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def formfield(self, **kwargs):
         defaults = {
@@ -20,9 +19,9 @@ class CommaSeparatedEmailField(TextField):
             }
         }
         defaults.update(kwargs)
-        return super(CommaSeparatedEmailField, self).formfield(**defaults)
+        return super().formfield(**defaults)
 
-    def from_db_value(self, value, *args, **kwargs):
+    def from_db_value(self, value, expression, connection):
         return self.to_python(value)
 
     def get_prep_value(self, value):
@@ -33,13 +32,13 @@ class CommaSeparatedEmailField(TextField):
         - Email.objects.filter(to='mail@example.com')
         - Email.objects.filter(to=['one@example.com', 'two@example.com'])
         """
-        if isinstance(value, six.string_types):
+        if isinstance(value, str):
             return value
         else:
             return ', '.join(map(lambda s: s.strip(), value))
 
     def to_python(self, value):
-        if isinstance(value, six.string_types):
+        if isinstance(value, str):
             if value == '':
                 return []
             else:

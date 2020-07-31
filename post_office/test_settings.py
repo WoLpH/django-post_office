@@ -1,6 +1,3 @@
-# -*- coding: utf-8 -*-
-
-
 import django
 import os
 from distutils.version import StrictVersion
@@ -39,6 +36,7 @@ POST_OFFICE = {
         'smtp': 'django.core.mail.backends.smtp.EmailBackend',
         'connection_tester': 'post_office.tests.test_mail.ConnectionTestingBackend',
     },
+    'MAX_RETRIES': 2,
 }
 
 

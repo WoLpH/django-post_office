@@ -1,33 +1,29 @@
-# -*- coding: utf-8 -*-
-from __future__ import unicode_literals
-
 import os
 
 from collections import namedtuple
 from uuid import uuid4
-
 from email.mime.nonmultipart import MIMENonMultipart
+
+from django.core.exceptions import ValidationError
 from django.core.mail import EmailMessage, EmailMultiAlternatives
 from django.db import models
-from django.utils.encoding import python_2_unicode_compatible
-from django.utils.translation import pgettext_lazy, ugettext_lazy as _
+from django.utils.encoding import smart_str
+from django.utils.translation import pgettext_lazy, gettext_lazy as _
 from django.utils import timezone
 from jsonfield import JSONField
 
 from post_office import cache
 from post_office.fields import CommaSeparatedEmailField
 
-from .compat import text_type, smart_text
 from .connections import connections
-from .settings import context_field_class, get_log_level, get_template_engine
+from .settings import context_field_class, get_log_level, get_template_engine, get_override_recipients
 from .validators import validate_email_with_name, validate_template_syntax
 
 
 PRIORITY = namedtuple('PRIORITY', 'low medium high now')._make(range(4))
-STATUS = namedtuple('STATUS', 'sent failed queued')._make(range(3))
+STATUS = namedtuple('STATUS', 'sent failed queued requeued')._make(range(4))
 
 
-@python_2_unicode_compatible
 class Email(models.Model):
     """
     A model to hold email information.
@@ -36,7 +32,7 @@ class Email(models.Model):
     PRIORITY_CHOICES = [(PRIORITY.low, _("low")), (PRIORITY.medium, _("medium")),
                         (PRIORITY.high, _("high")), (PRIORITY.now, _("now"))]
     STATUS_CHOICES = [(STATUS.sent, _("sent")), (STATUS.failed, _("failed")),
-                      (STATUS.queued, _("queued"))]
+                      (STATUS.queued, _("queued")), (STATUS.requeued, _("requeued"))]
 
     from_email = models.CharField(_("Email From"), max_length=254,
                                   validators=[validate_email_with_name])
@@ -60,14 +56,19 @@ class Email(models.Model):
                                                 blank=True, null=True)
     created = models.DateTimeField(auto_now_add=True, db_index=True)
     last_updated = models.DateTimeField(db_index=True, auto_now=True)
-    scheduled_time = models.DateTimeField(_('The scheduled sending time'),
-                                          blank=True, null=True, db_index=True)
+    scheduled_time = models.DateTimeField(_("Scheduled Time"),
+                                          blank=True, null=True, db_index=True,
+                                          help_text=_("The scheduled sending time"))
+    expires_at = models.DateTimeField(_("Expires"),
+                                      blank=True, null=True,
+                                      help_text=_("Email won't be sent after this timestamp"))
+    number_of_retries = models.PositiveIntegerField(null=True, blank=True)
     headers = JSONField(_('Headers'), blank=True, null=True)
     template = models.ForeignKey('post_office.EmailTemplate', blank=True,
-                                 null=True, verbose_name=_('Email template'),
+                                 null=True, verbose_name=_("Email template"),
                                  on_delete=models.CASCADE)
     context = context_field_class(_('Context'), blank=True, null=True)
-    backend_alias = models.CharField(_('Backend alias'), blank=True, default='',
+    backend_alias = models.CharField(_("Backend alias"), blank=True, default='',
                                      max_length=64)
 
     class Meta:
@@ -76,11 +77,11 @@ class Email(models.Model):
         verbose_name_plural = pgettext_lazy("Email addresses", "Emails")
 
     def __init__(self, *args, **kwargs):
-        super(Email, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self._cached_email_message = None
 
     def __str__(self):
-        return u'%s' % self.to
+        return '%s' % self.to
 
     def email_message(self):
         """
@@ -96,6 +97,9 @@ class Email(models.Model):
         Returns a django ``EmailMessage`` or ``EmailMultiAlternatives`` object,
         depending on whether html_message is empty.
         """
+        if get_override_recipients():
+            self.to = get_override_recipients()
+
         if self.template is not None:
             engine = get_template_engine()
             subject = engine.from_string(self.template.subject).render(self.context)
@@ -104,25 +108,31 @@ class Email(models.Model):
             html_message = multipart_template.render(self.context)
 
         else:
-            subject = smart_text(self.subject)
+            subject = smart_str(self.subject)
             plaintext_message = self.message
             multipart_template = None
             html_message = self.html_message
 
         connection = connections[self.backend_alias or 'default']
+        if isinstance(self.headers, dict) or self.expires_at:
+            headers = dict(self.headers or {})
+            if self.expires_at:
+                headers.update({'Expires': self.expires_at.strftime("%a, %-d %b %H:%M:%S %z")})
+        else:
+            headers = None
 
         if html_message:
             if plaintext_message:
                 msg = EmailMultiAlternatives(
                     subject=subject, body=plaintext_message, from_email=self.from_email,
                     to=self.to, bcc=self.bcc, cc=self.cc,
-                    headers=self.headers, connection=connection)
+                    headers=headers, connection=connection)
                 msg.attach_alternative(html_message, "text/html")
             else:
                 msg = EmailMultiAlternatives(
                     subject=subject, body=html_message, from_email=self.from_email,
                     to=self.to, bcc=self.bcc, cc=self.cc,
-                    headers=self.headers, connection=connection)
+                    headers=headers, connection=connection)
                 msg.content_subtype = 'html'
             if hasattr(multipart_template, 'attach_related'):
                 multipart_template.attach_related(msg)
@@ -131,7 +141,7 @@ class Email(models.Model):
             msg = EmailMessage(
                 subject=subject, body=plaintext_message, from_email=self.from_email,
                 to=self.to, bcc=self.bcc, cc=self.cc,
-                headers=self.headers, connection=connection)
+                headers=headers, connection=connection)
 
         for attachment in self.attachments.all():
             if attachment.headers:
@@ -189,12 +199,15 @@ class Email(models.Model):
 
         return status
 
+    def clean(self):
+        if self.scheduled_time and self.expires_at and self.scheduled_time > self.expires_at:
+            raise ValidationError(_("The scheduled time may not be later than the expires time."))
+
     def save(self, *args, **kwargs):
         self.full_clean()
-        return super(Email, self).save(*args, **kwargs)
+        return super().save(*args, **kwargs)
 
 
-@python_2_unicode_compatible
 class Log(models.Model):
     """
     A model to record sending email sending activities.
@@ -215,7 +228,7 @@ class Log(models.Model):
         verbose_name_plural = _("Logs")
 
     def __str__(self):
-        return text_type(self.date)
+        return str(self.date)
 
 
 class EmailTemplateManager(models.Manager):
@@ -223,7 +236,6 @@ class EmailTemplateManager(models.Manager):
         return self.get(name=name, language=language, default_template=default_template)
 
 
-@python_2_unicode_compatible
 class EmailTemplate(models.Model):
     """
     Model to hold template information from db
@@ -257,7 +269,7 @@ class EmailTemplate(models.Model):
         ordering = ['name']
 
     def __str__(self):
-        return u'%s %s' % (self.name, self.language)
+        return '%s %s' % (self.name, self.language)
 
     def natural_key(self):
         return (self.name, self.language, self.default_template)
@@ -267,7 +279,7 @@ class EmailTemplate(models.Model):
         if self.default_template and not self.name:
             self.name = self.default_template.name
 
-        template = super(EmailTemplate, self).save(*args, **kwargs)
+        template = super().save(*args, **kwargs)
         cache.delete(self.name)
         return template
 
@@ -284,7 +296,6 @@ def get_upload_path(instance, filename):
                         str(date.month), str(date.day), filename)
 
 
-@python_2_unicode_compatible
 class Attachment(models.Model):
     """
     A model describing an email attachment.
@@ -292,7 +303,7 @@ class Attachment(models.Model):
     file = models.FileField(_('File'), upload_to=get_upload_path)
     name = models.CharField(_('Name'), max_length=255, help_text=_("The original filename"))
     emails = models.ManyToManyField(Email, related_name='attachments',
-                                    verbose_name=_('Email addresses'))
+                                    verbose_name=_('Emails'))
     mimetype = models.CharField(max_length=255, default='', blank=True)
     headers = JSONField(_('Headers'), blank=True, null=True)
 

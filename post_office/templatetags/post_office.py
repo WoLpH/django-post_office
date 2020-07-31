@@ -1,9 +1,7 @@
-# -*- coding: utf-8 -*-
-from __future__ import unicode_literals
-
 from email.mime.image import MIMEImage
 import hashlib
 import os
+
 from django import template
 from django.conf import settings
 from django.contrib.staticfiles import finders

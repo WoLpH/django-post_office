@@ -1,17 +1,32 @@
-from __future__ import absolute_import, unicode_literals
+import datetime
 
-from celery import shared_task
-from django.core import management
+from django.utils.timezone import now
 
-from . import settings
+from post_office.mail import send_queued
+from post_office.utils import cleanup_expired_mails
 
+# Only define the tasks and handler if we can import celery.
+# This allows the module to be imported in environments without Celery, for
+# example by other task queue systems such as Huey, which use the same pattern
+# of auto-discovering tasks in "tasks" submodules
+try:
+    from celery import shared_task
+except ImportError:
+    pass
+else:
+    @shared_task(ignore_result=True)
+    def send_queued_mail(*args, **kwargs):
+        send_queued()
 
-@shared_task
-def send_queued_mail(processes=settings.get_threads_per_process()):
-    return management.call_command('send_queued_mail', processes=processes)
+    def queued_mail_handler(sender, **kwargs):
+        """
+        To be called by post_office.signals.email_queued.send()
+        """
+        send_queued_mail.delay()
 
-
-@shared_task
-def cleanup_mail(days=90, delete_attachments=False):
-    return management.call_command('cleanup_mail', days=days,
-                                   delete_attachments=delete_attachments)
+    @shared_task(ignore_result=True)
+    def cleanup_mail(*args, **kwargs):
+        days = kwargs.get('days', 90)
+        cutoff_date = now() - datetime.timedelta(days)
+        delete_attachments = kwargs.get('delete_attachments', True)
+        cleanup_expired_mails(cutoff_date, delete_attachments)

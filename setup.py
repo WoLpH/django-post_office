@@ -1,5 +1,6 @@
-# -*- coding: utf-8 -*-
+from ast import literal_eval
 import sys
+from os.path import dirname, join
 from setuptools import setup
 from setuptools.command.test import test as TestCommand
 
@@ -26,12 +27,15 @@ class Tox(TestCommand):
         sys.exit(errno)
 
 
+with open(join(dirname(__file__), 'post_office/version.txt'), 'r') as fh:
+    VERSION = '.'.join(map(str, literal_eval(fh.read())))
+
 TESTS_REQUIRE = ['tox >= 2.3']
 
 
 setup(
     name='django-post_office',
-    version='3.1.0',
+    version=VERSION,
     author='Selwin Ong',
     author_email='selwin.ong@gmail.com',
     packages=['post_office'],
@@ -42,7 +46,7 @@ setup(
     zip_safe=False,
     include_package_data=True,
     package_data={'': ['README.rst']},
-    install_requires=['django>=1.8', 'jsonfield'],
+    install_requires=['django>=2.2', 'jsonfield>=3.0'],
     classifiers=[
         'Development Status :: 5 - Production/Stable',
         'Environment :: Web Environment',
@@ -51,19 +55,20 @@ setup(
         'License :: OSI Approved :: MIT License',
         'Operating System :: OS Independent',
         'Programming Language :: Python',
-        'Programming Language :: Python :: 2',
-        'Programming Language :: Python :: 2.7',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.3',
-        'Programming Language :: Python :: 3.4',
+        'Programming Language :: Python :: 3 :: Only',
         'Programming Language :: Python :: 3.5',
         'Programming Language :: Python :: 3.6',
+        'Programming Language :: Python :: 3.7',
+        'Programming Language :: Python :: 3.8',
+        'Topic :: Communications :: Email',
         'Topic :: Internet :: WWW/HTTP',
         'Topic :: Software Development :: Libraries :: Python Modules',
     ],
     tests_require=TESTS_REQUIRE,
     extras_require={
         'test': TESTS_REQUIRE,
+        'prevent-XSS': ['bleach'],
     },
     cmdclass={'test': Tox}
 )

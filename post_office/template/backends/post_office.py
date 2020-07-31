@@ -1,5 +1,3 @@
-from __future__ import unicode_literals
-
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 from django.template import TemplateDoesNotExist
@@ -11,7 +9,7 @@ from django.template.engine import Engine
 class Template(DjangoTemplate):
     def __init__(self, template, backend):
         template._attached_images = []
-        super(Template, self).__init__(template, backend)
+        super().__init__(template, backend)
 
     def attach_related(self, email_message):
         assert isinstance(email_message, EmailMultiAlternatives), "Parameter must be of type EmailMultiAlternatives"
@@ -32,10 +30,15 @@ class PostOfficeTemplates(BaseEngine):
         options = params.pop('OPTIONS').copy()
         options.setdefault('autoescape', True)
         options.setdefault('debug', settings.DEBUG)
-        options.setdefault('file_charset', settings.FILE_CHARSET)
+        options.setdefault(
+            'file_charset',
+            settings.FILE_CHARSET
+            if settings.is_overridden('FILE_CHARSET')
+            else 'utf-8',
+        )
         libraries = options.get('libraries', {})
         options['libraries'] = self.get_templatetag_libraries(libraries)
-        super(PostOfficeTemplates, self).__init__(params)
+        super().__init__(params)
         self.engine = Engine(self.dirs, self.app_dirs, **options)
 
     def from_string(self, template_code):

@@ -8,25 +8,37 @@ Some awesome features are:
 * Allows you to send email asynchronously
 * Multi backend support
 * Supports HTML email
+* Supports inlined images in HTML email
 * Supports database based email templates
+* Supports multilingual email templates (i18n)
 * Built in scheduling support
 * Works well with task queues like `RQ <http://python-rq.org>`_ or `Celery <http://www.celeryproject.org>`_
 * Uses multiprocessing (and threading) to send a large number of emails in parallel
-* Supports multilingual email templates (i18n)
 
 
 Dependencies
 ============
 
-* `django >= 1.8 <http://djangoproject.com/>`_
-* `django-jsonfield <https://github.com/bradjasper/django-jsonfield>`_
+* `django >= 2.2 <https://djangoproject.com/>`_
+* `jsonfield <https://github.com/rpkilby/jsonfield>`_
+
+
+Optional Dependency
+-------------------
+
+* `bleach <https://bleach.readthedocs.io/>`_
+
+Add this optional dependency, so that HTML emails are nicely rendered inside the Django admin
+backend. Without this library, all HTML tags will otherwise be stripped for safety reasons in order
+to prevent XSS attacks.
 
 
 Installation
 ============
 
 |Build Status|
-
+|PyPI version|
+|Software license|
 
 * Install from PyPI (or you `manually download from PyPI <http://pypi.python.org/pypi/django-post_office>`_)::
 
@@ -91,39 +103,6 @@ You can schedule this management command to run regularly via cron::
 
     * * * * * (/usr/bin/python manage.py send_queued_mail >> send_mail.log 2>&1)
 
-or, if you use uWSGI_ as application server, add this short snipped  to the
-project's ``wsgi.py`` file:
-
-.. code-block:: python
-
-    from django.core.wsgi import get_wsgi_application
-
-    application = get_wsgi_application()
-
-    # add this block of code
-    try:
-        import uwsgidecorators
-        from django.core.management import call_command
-
-        @uwsgidecorators.timer(10)
-        def send_queued_mail(num):
-            """Send queued mail every 10 seconds"""
-            call_command('send_queued_mail', processes=1)
-
-    except ImportError:
-        print("uwsgidecorators not found. Cron and timers are disabled")
-
-Alternatively you can also use the decorator ``@uwsgidecorators.cron(minute, hour, day, month, weekday)``.
-This will schedule a task at specific times. Use ``-1`` to signal any time, it corresponds to the ``*``
-in cron.
-
-Please note that ``uwsgidecorators`` are available only, if the application has been started
-with **uWSGI**. However, Django's internal ``./manange.py runserver`` also access this file,
-therefore wrap the block into an exception handler as shown above.
-
-This configuration is very useful in environments, such as Docker containers, where you
-don't have a running cron-daemon.
-
 
 Usage
 =====
@@ -170,6 +149,9 @@ arguments:
 +--------------------+----------+--------------------------------------------------+
 | scheduled_time     | No       | A date/datetime object indicating when the email |
 |                    |          | should be sent                                   |
++--------------------+----------+--------------------------------------------------+
+| expires_at         | No       | If specified, mails that are not yet sent        |
+|                    |          | won't be delivered after this date.              |
 +--------------------+----------+--------------------------------------------------+
 | priority           | No       | ``high``, ``medium``, ``low`` or ``now``         |
 |                    |          | (send_immediately)                               |
@@ -327,7 +309,7 @@ First we must add a special Django template backend to our list of template engi
 
 	TEMPLATES = [
 	    {
-	        …
+	        ...
 	    }, {
 	        'BACKEND': 'post_office.template.backends.post_office.PostOfficeTemplates',
 	        'APP_DIRS': True,
@@ -358,9 +340,9 @@ In templates used to render HTML for emails add
 
 .. code-block:: Django
 
-	{% load … post_office %}
+	{% load ... post_office %}
 
-	<p>… somewhere in the body …</p>
+	<p>... somewhere in the body ...</p>
 	<img src="{% inline_image 'path/to/image.png' %}" />
 
 Here the templatetag named ``inline_image`` is used to keep track of inlined images. It takes a single
@@ -378,10 +360,11 @@ following code snippet:
 
 	from django.core.mail import EmailMultiAlternatives
 
-	subject, body, from_email, to_email = "Hello", "Plain text body", "no-reply@example.com", "john@example.com"
+	subject, body = "Hello", "Plain text body"
+	from_email, to_email = "no-reply@example.com", "john@example.com"
 	email_message = EmailMultiAlternatives(subject, body, from_email, [to_email])
 	template = get_template('email-template-name.html', using='post_office')
-	context = {…}
+	context = {...}
 	html = template.render(context)
 	email_message.attach_alternative(html, 'text/html')
 	template.attach_related(email_message)
@@ -396,7 +379,7 @@ code snippet:
 
 	subject, from_email, to_email = "Hello", "no-reply@example.com", "john@example.com"
 	template = get_template('email-template-name.html', using='post_office')
-	context = {…}
+	context = {...}
 	html = template.render(context)
 	email_message = EmailMultiAlternatives(subject, html, from_email, [to_email])
 	email_message.content_subtype = 'html'
@@ -477,8 +460,131 @@ You may want to set these up via cron to run regularly::
     * * * * * (cd $PROJECT; python manage.py send_queued_mail --processes=1 >> $PROJECT/cron_mail.log 2>&1)
     0 1 * * * (cd $PROJECT; python manage.py cleanup_mail --days=30 --delete-attachments >> $PROJECT/cron_mail_cleanup.log 2>&1)
 
+
+Integration with Celery
+=======================
+
+If your Django project runs in a Celery enabled configuration, you can use its worker to send out
+queued emails. Compared to the solution with cron (see above), or the solution with uWSGI timers
+(see below) this setup has the big advantage that queued emails are send *immediately* after they
+have been added to the mail queue. The delivery is still performed in a separate and asynchronous
+task, which prevents sending emails during the request/response-cycle.
+
+If you `configured Celery`_ in your project and started the `Celery worker`_,  you should see
+something such as:
+
+.. code-block:: text
+
+	--------------- celery@halcyon.local v4.0 (latentcall)
+	--- ***** -----
+	-- ******* ---- [Configuration]
+	- *** --- * --- . broker:      amqp://guest@localhost:5672//
+	- ** ---------- . app:         __main__:0x1012d8590
+	- ** ---------- . concurrency: 8 (processes)
+	- ** ---------- . events:      OFF (enable -E to monitor this worker)
+	- ** ----------
+	- *** --- * --- [Queues]
+	-- ******* ---- . celery:      exchange:celery(direct) binding:celery
+	--- ***** -----
+
+	[tasks]
+	. post_office.tasks.cleanup_expired_mails
+	. post_office.tasks.send_queued_mail
+
+
+Emails will now be delivered by the Celery worker, immediately after they have been queued. In order
+to make this happen, the project's ``celery.py`` setup shall invoke the autodiscover_tasks_
+function. There is no need to otherwise configure Post Office for integrating with Celery. However,
+in case of a temporary delivery failure, we might want retrying to send those emails by a periodic
+task. This can be done by a simple `Celery beat configuration`_, for instance through
+
+.. code-block:: python
+
+	app.conf.beat_schedule = {
+	    'send-queued-mail': {
+	        'task': 'post_office.tasks.send_queued_mail',
+	        'schedule': 600.0,
+	    },
+	}
+
+This will send queued emails every 10 minutes. If you are using `Django Celery Beat`_ (which I
+highly recommend), then use the Django-Admin backend and add a periodic taks for
+``post_office.tasks.send_queued_mail``.
+
+Depending on your policy, you may also want to remove expired emails from the queue. This can be
+done by adding another Periodic taks for ``post_office.tasks.cleanup_mail``, which may run once a
+week or month.
+
+.. _configured Celery: https://docs.celeryproject.org/en/latest/userguide/application.html
+.. _Celery worker: https://docs.celeryproject.org/en/latest/userguide/workers.html
+.. _Celery beat configuration: https://docs.celeryproject.org/en/latest/userguide/periodic-tasks.html#entries
+.. _Django Celery Beat: https://django-celery-beat.readthedocs.io/en/latest/
+.. _autodiscover_tasks: https://docs.celeryproject.org/en/latest/reference/celery.html#celery.Celery.autodiscover_tasks
+
+
+Integration with uWSGI
+======================
+
+If setting up Celery is too daunting and you use uWSGI_ as application server, then uWSGI decorators
+can act as a poor men's scheduler. Just add this short snipped  to the project's ``wsgi.py`` file:
+
+.. code-block:: python
+
+    from django.core.wsgi import get_wsgi_application
+
+    application = get_wsgi_application()
+
+    # add this block of code
+    try:
+        import uwsgidecorators
+        from django.core.management import call_command
+
+        @uwsgidecorators.timer(10)
+        def send_queued_mail(num):
+            """Send queued mail every 10 seconds"""
+            call_command('send_queued_mail', processes=1)
+
+    except ImportError:
+        print("uwsgidecorators not found. Cron and timers are disabled")
+
+Alternatively you can also use the decorator ``@uwsgidecorators.cron(minute, hour, day, month, weekday)``.
+This will schedule a task at specific times. Use ``-1`` to signal any time, it corresponds to the ``*``
+in cron.
+
+Please note that ``uwsgidecorators`` are available only, if the application has been started
+with **uWSGI**. However, Django's internal ``./manange.py runserver`` also access this file,
+therefore wrap the block into an exception handler as shown above.
+
+This configuration can be useful in environments, such as Docker containers, where you
+don't have a running cron-daemon.
+
+.. _uWSGI: https://uwsgi-docs.readthedocs.org/en/latest/
+
+
+Signals
+=======
+
+Each time an email is added to the mail queue, Post Office emits a special `Django signal`_.
+Whenever a third party application wants to be informed about this event, it shall connect a
+callback function to the Post Office's signal handler ``email_queued``, for instance:
+
+.. code-block:: python
+
+	from django.dispatch import receiver
+	from post_office.signals import email_queued
+
+	@receiver(email_queued)
+	def my_callback(sender, emails, **kwargs):
+	    print("Added {} mails to the sending queue".format(len(emails)))
+
+.. _Django signal: https://docs.djangoproject.com/en/stable/topics/signals/
+
+The Emails objects added to the queue are passed as list to the callback handler.
+
+
 Settings
 ========
+
 This section outlines all the settings and configurations that you can put
 in Django's ``settings.py`` to fine tune ``post-office``'s behavior.
 
@@ -496,6 +602,7 @@ number of queued emails fetched in one batch.
         'BATCH_SIZE': 50
     }
 
+
 Default Priority
 ----------------
 
@@ -509,6 +616,33 @@ setting ``DEFAULT_PRIORITY``. Integration with asynchronous email backends
     POST_OFFICE = {
         'DEFAULT_PRIORITY': 'now'
     }
+
+
+Override Recipients
+-------------------
+
+Defaults to ``None``. This option is useful if you want to redirect all emails to specified a few email for development purposes.
+
+.. code-block:: python
+
+    # Put this in settings.py
+    POST_OFFICE = {
+        'OVERRIDE_RECIPIENTS': ['to@example.com', 'to2@example.com']
+    }
+
+Mail Retry
+-------------------
+
+Defaults to Not Activated. Auto requeue failed email with time interval
+
+.. code-block:: python
+
+    # Put this in settings.py
+    POST_OFFICE = {
+     'MAX_RETRIES': 4
+     'RETRY_INTERVAL': datetime.timedelta(minutes=15)
+}
+
 
 Log Level
 ---------
@@ -543,6 +677,7 @@ setting ``SENDING_ORDER``. For example, if you want to send queued emails in FIF
         'SENDING_ORDER': ['created']
     }
 
+
 Context Field Serializer
 ------------------------
 
@@ -559,6 +694,7 @@ field class to store context variables. For example if you want to use
     }
 
 ``CONTEXT_FIELD_CLASS`` defaults to ``jsonfield.JSONField``.
+
 
 Logging
 -------
@@ -692,47 +828,7 @@ or::
 Changelog
 =========
 
-Version 3.1.0 (2018-07-24)
---------------------------
-* Improvements to attachments are handled. Thanks @SeiryuZ!
-* Added ``--delete-attachments`` flag to ``cleanup_mail`` management command. Thanks @Seiryuz!
-* I18n improvements. Thanks @vsevolod-skripnik and @delneg!
-* Django admin improvements. Thanks @kakulukia!
-
-
-Version 3.0.4
--------------
-* Added compatibility with Django 2.0. Thanks @PreActionTech and @PetrDlouhy!
-* Added natural key support to `EmailTemplate` model. Thanks @maximlomakin!
-
-
-Version 3.0.2
--------------
-- Fixed memory leak when multiprocessing is used.
-- Fixed a possible error when adding a new email from Django admin. Thanks @ivlevdenis!
-
-
-Version 3.0.2
--------------
-- `_send_bulk` now properly catches exceptions when preparing email messages.
-
-
-Version 3.0.1
--------------
-- Fixed an infinite loop bug in `send_queued_mail` management command.
-
-
-Version 3.0.0
--------------
-* `_send_bulk` now allows each process to use multiple threads to send emails.
-* Added support for mimetypes in email attachments. Thanks @clickonchris!
-* An `EmailTemplate` can now be used as defaults multiple times in one language. Thanks @sac7e!
-* `send_queued_mail` management command will now check whether there are more queued emails to be sent before exiting.
-* Drop support for Django < 1.8. Thanks @fendyh!
-
-
 Full changelog can be found `here <https://github.com/ui/django-post_office/blob/master/CHANGELOG.md>`_.
-
 
 Created and maintained by the cool guys at `Stamps <https://stamps.co.id>`_,
 Indonesia's most elegant CRM/loyalty platform.
@@ -741,4 +837,7 @@ Indonesia's most elegant CRM/loyalty platform.
 .. |Build Status| image:: https://travis-ci.org/ui/django-post_office.png?branch=master
    :target: https://travis-ci.org/ui/django-post_office
 
-.. _uWSGI: https://uwsgi-docs.readthedocs.org/en/latest/
+.. |PyPI version| image:: https://img.shields.io/pypi/v/django-post_office.svg
+   :target: https://pypi.org/project/django-post_office/
+
+.. |Software license| image:: https://img.shields.io/pypi/l/django-post_office.svg

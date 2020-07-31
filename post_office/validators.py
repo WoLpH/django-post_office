@@ -1,9 +1,7 @@
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.template import Template, TemplateSyntaxError, TemplateDoesNotExist
-from django.utils.encoding import force_text
-
-from .compat import text_type
+from django.utils.encoding import force_str
 
 
 def validate_email_with_name(value):
@@ -12,7 +10,7 @@ def validate_email_with_name(value):
 
     Both "Recipient Name <email@example.com>" and "email@example.com" are valid.
     """
-    value = force_text(value)
+    value = force_str(value)
 
     recipient = value
     if '<' and '>' in value:
@@ -46,4 +44,4 @@ def validate_template_syntax(source):
     try:
         Template(source)
     except (TemplateSyntaxError, TemplateDoesNotExist) as err:
-        raise ValidationError(text_type(err))
+        raise ValidationError(str(err))
