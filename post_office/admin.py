@@ -308,6 +308,7 @@ class EmailTemplateAdmin(admin.ModelAdmin):
     formfield_overrides = {
         models.CharField: {'widget': SubjectField}
     }
+    change_form_template = 'admin/post_office/EmailTemplate/change_form.html'
 
     def change_view(self, request, object_id, form_url='', extra_context=None):
         if request.GET.get('preview'):
