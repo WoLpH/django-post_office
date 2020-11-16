@@ -12,7 +12,7 @@ from django.core.exceptions import ValidationError
 from django.core.mail.message import SafeMIMEText
 from django.forms import BaseInlineFormSet
 from django.forms.widgets import TextInput
-from django.utils import six, html
+from django.utils import html
 from django.http.response import HttpResponse, HttpResponseNotFound
 from django.template import Context, Template
 from django.urls import reverse
@@ -387,3 +387,8 @@ class EmailTemplateAdmin(admin.ModelAdmin):
 class AttachmentAdmin(admin.ModelAdmin):
     list_display = ['name', 'file']
     filter_horizontal = ['emails']
+
+admin.site.register(Email, EmailAdmin)
+admin.site.register(Log, LogAdmin)
+admin.site.register(EmailTemplate, EmailTemplateAdmin)
+admin.site.register(Attachment, AttachmentAdmin)
